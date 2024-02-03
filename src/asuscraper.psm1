@@ -1,12 +1,24 @@
 using module Selenium
 
+#.SYNOPSIS
+# Connect to http://www.asusrouter.com and log-in with the given username and
+# password.
+#
+#.DESCRIPTION
+# Uses a Selenium driver to remote-control a browser window and connect to your
+# router admin page at www.asusrouter.com, and logs in using the given username
+# and password.  This means there is the security issue - if you do *not* trust
+# the router page hosted at www.asusrouter.com, DO NOT USE THIS TOOL.
 function Start-AsusSession {
     [CmdletBinding()]
     param(
+        # Any standard Selenium driver that is compatible with the AsusWRT server.
         [Parameter(Mandatory)]
         [OpenQA.Selenium.IWebDriver] $Driver, 
+        # Your AsusWRT username
         [Parameter(Mandatory)]
         [string] $Username, 
+        # Your AsusWRT password
         [Parameter(Mandatory)]
         [string] $Password
     )
@@ -21,6 +33,10 @@ function Start-AsusSession {
     Invoke-SeClick -Element $buttonEl | Out-Null
 }
 
+
+#.SYNOPSIS
+# Navigate to the main network map pager and download all entries from the
+# client list.
 function Get-AsusClientInfo {
     [CmdletBinding()]
     param(
@@ -48,11 +64,34 @@ function Get-AsusClientInfo {
     }
 }
 
+
+#.SYNOPSIS
+# Uses Selenium to navigate to the WAN/DHCP page of your ASUS admin page and
+# extract all manual DHCP assignments as PSCustomObjects.
+#
+#.OUTPUTS
+# A list of PSCustomObjects with the following members:
+# - IconName (not user-friendly, usually of the form typeNN eg type60 for a smartbulb)
+# - ClientName
+# - IPAddress
+# - ClientMAC
+# - DNSServer
+# - HostName
+#
+#.EXAMPLE
+# To export the result into CSV:
+# ```
+# Get-DHCPManualAssignments $Driver | 
+#   Export-Csv .\myfiles\DHCPManualAssignments.csv -NoTypeInformation 
+# ```
 function Get-AsusDHCPAssignments {
     [CmdletBinding()]
     param(
+        # Any standard Selenium driver that is compatible with the AsusWRT server.
         [OpenQA.Selenium.IWebDriver] 
         [Parameter(Mandatory)] $Driver,
+        # If set, the command will assume the DHCP config page is already
+        # visible and will skip the navigation step.
         [switch] $SkipNavigate
     )
 
@@ -78,6 +117,13 @@ function Get-AsusDHCPAssignments {
     }
 }
 
+
+#.SYNOPSIS
+# Uses Selenium to navigate to the WAN/DHCP page of your ASUS admin page and
+# extract a single manual DHCP assignments as PSCustomObject for the given MAC
+# address.
+#
+# See Get-AsusDHCPAssignments for more details.
 function Get-AsusDHCPAssignment {
     [CmdletBinding()]
     param(
@@ -93,6 +139,23 @@ function Get-AsusDHCPAssignment {
         }
 }
 
+
+#.SYNOPSIS
+# Uses Selenium to navigate to the WAN/DHCP page of your ASUS admin page, enable
+# manual DHCP binding, and load in the given parameters into the page.
+#
+#.DESCRIPTION
+# This command allows you to load-in manual DHCP assignments into your ASUSWRT
+# router admin pages.  This is a pipeline command.  At the beginning of the
+# pipeline it will execute a navigate step, and at completion it will execute
+# the "apply" button that will result in a router settings update operation.
+#
+#.EXAMPLE
+# To export the result into CSV:
+# ```
+# Import-Csv .\myfiles\DHCPManualAssignments.csv | 
+#    Set-DHCPManualAssignments $Driver   
+# ```
 function Set-AsusDHCPAssignment {
     [CmdletBinding()]
     param(
