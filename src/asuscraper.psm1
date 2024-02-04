@@ -23,8 +23,10 @@ function Start-AsusSession {
         [string] $Password
     )
 
+    $driver.Manage().Timeouts().ImplicitWait = 0
+
     Enter-SeUrl http://www.asusrouter.com -Driver $Driver | Out-Null
-    $loginEl = Find-SeElement -Driver $Driver -Id login_username
+    $loginEl = Find-SeElement -Driver $Driver -Id login_username -Wait
     $passwdEl = Find-SeElement -Driver $Driver -Name login_passwd
     $buttonEl = Find-SeElement -Driver $Driver -By CssSelector ".button"
 
@@ -99,23 +101,30 @@ function Get-AsusDHCPAssignments {
         Enter-SeUrl http://www.asusrouter.com/Advanced_DHCP_Content.asp -Driver $Driver | Out-Null
     }
     
-    $rowCount = (Find-SeElement -Driver $Driver -By XPath "//table[@id='dhcp_staticlist_table']/tbody/tr" | Measure-Object).Count
+    $rowCount = (Find-SeElement -Driver $Driver -By XPath "//table[@id='dhcp_staticlist_table']/tbody/tr" -Wait | Measure-Object).Count
     #we can't iterate across the raw table because it will get rebuilt, so we'll fetch the row instead.
     1..$rowCount | ForEach-Object {
-        $row = Find-SeElement -Driver $Driver -By XPath "//table[@id='dhcp_staticlist_table']/tbody/tr[position()=$_]"
+        $row = Find-SeElement -Driver $Driver -By XPath "//table[@id='dhcp_staticlist_table']/tbody/tr[position()=$_]" -Wait
         $cells = $row.FindElementsByXPath('td')
-        # FindElement* fails if element not found, so we use FindElements and take first so we can handle empty table.
-        $iconEl = $cells[0].FindElementsByCssSelector('div.clientIcon, img.imgUserIcon_card') | Select-Object -First 1
-        if(-not $iconEl) {
-            Write-Warning "DHCP Manual Assignments table is empty.  Disregard this warning if that's expected."
+        if(($cells | Measure-Object).Count -eq 1) {
+            Write-Warning "Found one big 'no data in table' cell." + 
+                "DHCP Manual Assignments table is empty." + 
+                "Disregard this warning if that's expected."
+
             return;
         }
+        $iconEl = $cells[0].FindElementByCssSelector('div.clientIcon, img.imgUserIcon_card')
         $nameAndMacSubcell = $cells[0].FindElementByCssSelector('tr :nth-child(2)') #nested tables!
         $clientNameDiv = $nameAndMacSubcell.FindElementByCssSelector(':nth-child(1)')
         $macDiv = $nameAndMacSubcell.FindElementByCssSelector(':nth-child(2)')
+        $iconName = ''
+        if($iconEl.TagName -eq 'div') {
+            #if it's a div, then it's a predefined image.  If it's an img, it's just dynamic and can't be stored.
+            $iconName = $iconEl.GetAttribute('class').Split(' ')[1]
+        }
 
         [PSCustomObject]@{
-            IconName = $iconEl.GetAttribute('class').Split(' ')[-1] #icon class is usually last entry.  But not always.
+            IconName = $iconName
             ClientName = $clientNameDiv.Text
             IPAddress = $cells[1].Text
             ClientMAC = $macDiv.Text
@@ -185,7 +194,7 @@ function Set-AsusDHCPAssignment {
     begin {
         Enter-SeUrl http://www.asusrouter.com/Advanced_DHCP_Content.asp -Driver $Driver | Out-Null
         Write-Verbose "Enabling manual assignment..."
-        Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector 'input[name="dhcp_static_x"][value="1"]') | Out-Null
+        Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector 'input[name="dhcp_static_x"][value="1"]' -Wait) | Out-Null
     } 
     process {
         #helper function to find the MAC address row.
@@ -193,15 +202,16 @@ function Set-AsusDHCPAssignment {
             param()
 
             #within the static-list table, find the row that contains the div that contain the clientMAC.
-            Find-SeElement -Driver $Driver `
+            Find-SeElement -Driver $Driver -Timeout 0.1 `
                 -By XPath "//table[@id='dhcp_staticlist_table']/tbody/tr[.//div[text()='$ClientMAC']]"
         }
 
         #brief sleep needed because just after load the Get call can fail because the table is still being rebuilt.
         Start-Sleep -Milliseconds 250
+        Write-Verbose "Checking if '$ClientMAC' is already set..."
         $macRowEl = Get-MACRow
         if($macRowEl) {
-            Write-Verbose "ClientMAC '$ClientMAC' already set. Removing..."
+            Write-Verbose "ClientMAC '$ClientMAC' is already set. Removing..."
             Invoke-SeClick -Element ($macRowEl.FindElementByCssSelector(".remove_btn")) | Out-Null
             Start-Sleep -Milliseconds 250
         }
@@ -210,7 +220,7 @@ function Set-AsusDHCPAssignment {
             $DNSServer = ''
         }
 
-        Write-Verbose "Setting values that are done on create for MAC '$ClientMac'..."
+        Write-Verbose "Setting insert values for MAC '$ClientMac'..."
         #set values that are done on create
         Send-SeKeys -Keys $ClientMAC -Element (Find-SeElement -Driver $Driver -By Name dhcp_staticmac_x_0)
         Send-SeKeys -Keys $IPAddress -Element (Find-SeElement -Driver $Driver -By Name dhcp_staticip_x_0)
@@ -225,15 +235,15 @@ function Set-AsusDHCPAssignment {
         Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector ".add_btn") | Out-Null
 
         if($IconName -or $ClientName) {
-            Write-Verbose "Setting ClientName/Icon for MAC '$ClientMac'..."
             Start-Sleep -Milliseconds 250
-            # find row for MAC that was just added.
+            Write-Verbose "Finding row that was just added for MAC '$ClientMac' to set ClientName/Icon..."
             $macRowEl = Get-MACRow
             if(-not $macRowEl) {
                 Write-Warning "MAC address addition for '$ClientMAC' failed."
                 return
             }
             # icon DOM varies between div.clientIcon vs img.imgUserIcon_card edepending on how it was loaded.
+            Write-Verbose "Opening detail window to set ClientName/Icon for '$ClientMac'..."
             Invoke-SeClick -Element ($macRowEl.FindElementByCssSelector('div.clientIcon, img.imgUserIcon_card'))
             if($ClientName) {
                 $clientNameEl = (Find-SeElement -Driver $Driver -By Id card_client_name)
@@ -247,14 +257,15 @@ function Set-AsusDHCPAssignment {
                 Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector "#card_custom_image .$IconName") | Out-Null
             }
             #apply
+            Write-Verbose "Applying ClientName/Icon for MAC '$ClientMac'..."
             Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By Id card_client_confirm) | Out-Null
         }
         Start-Sleep -Milliseconds 250
     } 
     end {
-        Write-Verbose "Applying all changes..."
-        Start-Sleep -Milliseconds 1000 #sometimes complains about button being obscured.  give it a sec.
-        Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector "div.apply_gen input.button_gen") | Out-Null
+        Write-Verbose "Final apply/submit all changes..."
+        Start-Sleep -Milliseconds 2000 #sometimes complains about button being obscured.  give it time.
+        Invoke-SeClick -Element (Find-SeElement -Driver $Driver -By CssSelector "div.apply_gen input.button_gen" -Wait) | Out-Null
         Write-Verbose "Done."
     }
 }
